@@ -579,9 +579,7 @@ class SHAC:
     def play(self, cfg):
         self.load(cfg['params']['general']['checkpoint'])
         self.run(cfg['params']['config']['player']['games_num'])
-        print(rews)
-        print()
-        print(steps)
+  
 
     def save(self, filename = None):
         if filename is None:

@@ -380,6 +380,9 @@ class SHAC:
     def train(self):
         self.start_time = time.time()
 
+        rews = []
+        steps = []
+
         # add timers
         self.time_report.add_timer("algorithm")
         self.time_report.add_timer("compute actor loss")
@@ -510,6 +513,8 @@ class SHAC:
                 self.writer.add_scalar('rewards/step', -mean_policy_loss, self.step_count)
                 self.writer.add_scalar('rewards/time', -mean_policy_loss, time_elapse)
                 self.writer.add_scalar('rewards/iter', -mean_policy_loss, self.iter_count)
+                rews.append(-mean_policy_loss)
+                steps.append(self.step_count)
                 self.writer.add_scalar('policy_discounted_loss/step', mean_policy_discounted_loss, self.step_count)
                 self.writer.add_scalar('policy_discounted_loss/iter', mean_policy_discounted_loss, self.iter_count)
                 self.writer.add_scalar('best_policy_loss/step', self.best_policy_loss, self.step_count)
