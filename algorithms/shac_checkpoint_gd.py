@@ -47,9 +47,9 @@ class SHAC:
                             MM_caching_frequency = cfg["params"]['diff_env'].get('MM_caching_frequency', 1), \
                             no_grad = False)
 
-        print('num_envs= ', self.env.num_envs)
-        print('num_actions = ', self.env.num_actions)
-        print('num_obs = ', self.env.num_obs)
+        # print('num_envs= ', self.env.num_envs)
+        # print('num_actions = ', self.env.num_actions)
+        # print('num_obs = ', self.env.num_obs)
 
         self.num_envs = self.env.num_envs
         self.num_obs = self.env.num_obs
@@ -493,7 +493,7 @@ class SHAC:
                     batch_cnt += 1
 
                 self.value_loss = (total_critic_loss / batch_cnt).detach().cpu().item()
-                print('value iter {}/{}, loss = {:7.6f}'.format(j + 1, self.critic_iterations, self.value_loss), end='\r')
+                # print('value iter {}/{}, loss = {:7.6f}'.format(j + 1, self.critic_iterations, self.value_loss), end='\r')
 
             self.time_report.end_timer("critic training")
 
@@ -514,7 +514,7 @@ class SHAC:
                 mean_policy_discounted_loss = self.episode_discounted_loss_meter.get_mean()
 
                 if mean_policy_loss < self.best_policy_loss:
-                    print_info("save best policy with loss {:.2f}".format(mean_policy_loss))
+                    # print_info("save best policy with loss {:.2f}".format(mean_policy_loss))
                     self.save()
                     self.best_policy_loss = mean_policy_loss
 
@@ -538,8 +538,8 @@ class SHAC:
                 mean_policy_discounted_loss = np.inf
                 mean_episode_length = 0
 
-            print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(\
-                    self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, self.grad_norm_before_clip, self.grad_norm_after_clip))
+            # print('iter {}: ep loss {:.2f}, ep discounted loss {:.2f}, ep len {:.1f}, fps total {:.2f}, value loss {:.2f}, grad norm before clip {:.2f}, grad norm after clip {:.2f}'.format(\
+            #         self.iter_count, mean_policy_loss, mean_policy_discounted_loss, mean_episode_length, self.steps_num * self.num_envs / (time_end_epoch - time_start_epoch), self.value_loss, self.grad_norm_before_clip, self.grad_norm_after_clip))
 
             self.writer.flush()
 
@@ -573,7 +573,6 @@ class SHAC:
 
         # evaluate the final policy's performance
         self.run(self.num_envs)
-
         self.close()
 
     def play(self, cfg):
