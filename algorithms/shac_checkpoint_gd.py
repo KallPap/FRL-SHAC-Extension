@@ -144,6 +144,7 @@ class SHAC:
 
         self.time_report = TimeReport()
 
+
     def compute_actor_loss(self, deterministic=False):
         rew_acc = torch.zeros((self.steps_num + 1, self.num_envs), dtype=torch.float32, device=self.device)
         gamma = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
@@ -157,25 +158,28 @@ class SHAC:
             if self.ret_rms is not None:
                 ret_var = self.ret_rms.var.clone()
 
-        obs = self.env.initialize_trajectory()
+        obs = self.env.initialize_trajectory().requires_grad_(True)
         if self.obs_rms is not None:
             with torch.no_grad():
                 self.obs_rms.update(obs)
-            obs = obs_rms.normalize(obs)
+            obs = obs_rms.normalize(obs).requires_grad_(True)
         for i in range(self.steps_num):
             with torch.no_grad():
                 self.obs_buf[i] = obs.clone()
 
-            actions = self.actor(obs, deterministic = deterministic)
+            actions = self.actor(obs, deterministic=deterministic)
 
             obs, rew, done, extra_info = self.env.step(torch.tanh(actions))
+
             with torch.no_grad():
                 raw_rew = rew.clone()
+
             rew = rew * self.rew_scale
+
             if self.obs_rms is not None:
                 with torch.no_grad():
                     self.obs_rms.update(obs)
-                obs = obs_rms.normalize(obs)
+                obs = obs_rms.normalize(obs).requires_grad_(True)
 
             if self.ret_rms is not None:
                 with torch.no_grad():
@@ -184,7 +188,8 @@ class SHAC:
                 rew = rew / torch.sqrt(ret_var + 1e-6)
 
             self.episode_length += 1
-            done_env_ids = done.nonzero(as_tuple = False).squeeze(-1)
+
+            done_env_ids = done.nonzero(as_tuple=False).squeeze(-1)
 
             next_values[i + 1] = self.target_critic(obs).squeeze(-1)
 
@@ -195,19 +200,22 @@ class SHAC:
                     next_values[i + 1, id] = 0.
                 else:
                     if self.obs_rms is not None:
-                        real_obs = obs_rms.normalize(extra_info['obs_before_reset'][id])
+                        real_obs = obs_rms.normalize(extra_info['obs_before_reset'][id]).requires_grad_(True)
                     else:
-                        real_obs = extra_info['obs_before_reset'][id]
+                        real_obs = extra_info['obs_before_reset'][id].requires_grad_(True)
                     next_values[i + 1, id] = self.target_critic(real_obs).squeeze(-1)
+
             if (next_values[i + 1] > 1e6).sum() > 0 or (next_values[i + 1] < -1e6).sum() > 0:
                 print('next value error')
                 raise ValueError
+
             rew_acc[i + 1, :] = rew_acc[i, :] + gamma * rew
 
             if i < self.steps_num - 1:
                 actor_loss = actor_loss + (- rew_acc[i + 1, done_env_ids] - self.gamma * gamma[done_env_ids] * next_values[i + 1, done_env_ids]).sum()
             else:
                 actor_loss = actor_loss + (- rew_acc[i + 1, :] - self.gamma * gamma * next_values[i + 1, :]).sum()
+
             gamma = gamma * self.gamma
 
             gamma[done_env_ids] = 1.
@@ -246,10 +254,12 @@ class SHAC:
 
         if self.ret_rms is not None:
             actor_loss = actor_loss * torch.sqrt(ret_var + 1e-6)
+
         self.actor_loss = actor_loss.detach().cpu().item()
         self.step_count += self.steps_num * self.num_envs
 
         return actor_loss
+
 
     @torch.no_grad()
     def evaluate_policy(self, num_games, deterministic = False):
