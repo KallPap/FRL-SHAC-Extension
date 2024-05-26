@@ -9,6 +9,7 @@ from torch.utils.checkpoint import checkpoint
 import torch
 import torch.nn as nn
 from models import model_utils
+import numpy as np
 
 class CriticMLP(nn.Module):
     def __init__(self, obs_dim, cfg_network, device='cuda:0'):
@@ -24,7 +25,6 @@ class CriticMLP(nn.Module):
                 modules.append(torch.nn.LayerNorm(self.layer_dims[i + 1]))
         self.critic = nn.Sequential(*modules).to(device)
         self.obs_dim = obs_dim
-        print(self.critic)
 
     def forward(self, observations):
         observations.requires_grad_(True)

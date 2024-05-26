@@ -34,7 +34,5 @@ class CriticMLP(nn.Module):
     
         self.obs_dim = obs_dim
 
-        print(self.critic)
-
     def forward(self, observations):
         return self.critic(observations)

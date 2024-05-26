@@ -36,8 +36,6 @@ class ActorDeterministicMLP(nn.Module):
         self.action_dim = action_dim
         self.obs_dim = obs_dim
 
-        print(self.actor)
-
     def get_logstd(self):
         # return self.logstd
         return None
@@ -68,8 +66,6 @@ class ActorStochasticMLP(nn.Module):
         self.logstd = torch.nn.Parameter(torch.ones(action_dim, dtype=torch.float32, device=device) * logstd)
         self.action_dim = action_dim
         self.obs_dim = obs_dim
-        print(self.mu_net)
-        print(self.logstd)
 
     def get_logstd(self):
         return self.logstd
