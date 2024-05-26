@@ -23,8 +23,8 @@ import yaml
 import dflex as df
 
 import envs
-import models.actor
-import models.critic
+import models.actor_checkpoint_gd
+import models.critic_checkpoint_gd
 from utils.common import *
 import utils.torch_utils as tu
 from utils.running_mean_std import RunningMeanStd
@@ -169,68 +169,52 @@ class SHAC:
 
 
 
-
     def compute_actor_loss(self, deterministic = False):
         rew_acc = torch.zeros((self.steps_num + 1, self.num_envs), dtype = torch.float32, device = self.device)
         gamma = torch.ones(self.num_envs, dtype = torch.float32, device = self.device)
         next_values = torch.zeros((self.steps_num + 1, self.num_envs), dtype = torch.float32, device = self.device)
-
+        
         actor_loss = torch.tensor(0., dtype = torch.float32, device = self.device)
-
-
-        def actor_step_checkpoint(obs, deterministic):
-          return self.actor(obs, deterministic=deterministic)
 
         with torch.no_grad():
             if self.obs_rms is not None:
                 obs_rms = copy.deepcopy(self.obs_rms)
-
+                
             if self.ret_rms is not None:
                 ret_var = self.ret_rms.var.clone()
 
-        # initialize trajectory to cut off gradients between episodes.
         obs = self.env.initialize_trajectory()
         if self.obs_rms is not None:
-            # update obs rms
             with torch.no_grad():
                 self.obs_rms.update(obs)
-            # normalize the current obs
             obs = obs_rms.normalize(obs)
-
         for i in range(self.steps_num):
-            # collect data for critic training
             with torch.no_grad():
                 self.obs_buf[i] = obs.clone()
 
-            #actions = self.actor(obs, deterministic = deterministic)
-            actions = checkpoint(actor_step_checkpoint, obs, deterministic)
-
+            actions = self.actor(obs, deterministic = deterministic)
 
             obs, rew, done, extra_info = self.env.step(torch.tanh(actions))
-
+            
             with torch.no_grad():
                 raw_rew = rew.clone()
-
-            # scale the reward
+            
             rew = rew * self.rew_scale
-
+            
             if self.obs_rms is not None:
-                # update obs rms
                 with torch.no_grad():
                     self.obs_rms.update(obs)
-                # normalize the current obs
                 obs = obs_rms.normalize(obs)
 
             if self.ret_rms is not None:
-                # update ret rms
                 with torch.no_grad():
                     self.ret = self.ret * self.gamma + rew
                     self.ret_rms.update(self.ret)
-
+                    
                 rew = rew / torch.sqrt(ret_var + 1e-6)
 
             self.episode_length += 1
-
+        
             done_env_ids = done.nonzero(as_tuple = False).squeeze(-1)
 
             next_values[i + 1] = self.target_critic(obs).squeeze(-1)
@@ -238,37 +222,33 @@ class SHAC:
             for id in done_env_ids:
                 if torch.isnan(extra_info['obs_before_reset'][id]).sum() > 0 \
                     or torch.isinf(extra_info['obs_before_reset'][id]).sum() > 0 \
-                    or (torch.abs(extra_info['obs_before_reset'][id]) > 1e6).sum() > 0: # ugly fix for nan values
+                    or (torch.abs(extra_info['obs_before_reset'][id]) > 1e6).sum() > 0:
                     next_values[i + 1, id] = 0.
-                elif self.episode_length[id] < self.max_episode_length: # early termination
+                elif self.episode_length[id] < self.max_episode_length:
                     next_values[i + 1, id] = 0.
-                else: # otherwise, use terminal value critic to estimate the long-term performance
+                else:
                     if self.obs_rms is not None:
                         real_obs = obs_rms.normalize(extra_info['obs_before_reset'][id])
                     else:
                         real_obs = extra_info['obs_before_reset'][id]
                     next_values[i + 1, id] = self.target_critic(real_obs).squeeze(-1)
-
+            
             if (next_values[i + 1] > 1e6).sum() > 0 or (next_values[i + 1] < -1e6).sum() > 0:
                 print('next value error')
                 raise ValueError
-
+            
             rew_acc[i + 1, :] = rew_acc[i, :] + gamma * rew
 
             if i < self.steps_num - 1:
                 actor_loss = actor_loss + (- rew_acc[i + 1, done_env_ids] - self.gamma * gamma[done_env_ids] * next_values[i + 1, done_env_ids]).sum()
             else:
-                # terminate all envs at the end of optimization iteration
                 actor_loss = actor_loss + (- rew_acc[i + 1, :] - self.gamma * gamma * next_values[i + 1, :]).sum()
-
-            # compute gamma for next step
+        
             gamma = gamma * self.gamma
 
-            # clear up gamma and rew_acc for done envs
             gamma[done_env_ids] = 1.
             rew_acc[i + 1, done_env_ids] = 0.
 
-            # collect data for critic training
             with torch.no_grad():
                 self.rew_buf[i] = rew.clone()
                 if i < self.steps_num - 1:
@@ -277,7 +257,6 @@ class SHAC:
                     self.done_mask[i, :] = 1.
                 self.next_values[i] = next_values[i + 1].clone()
 
-            # collect episode loss
             with torch.no_grad():
                 self.episode_loss -= raw_rew
                 self.episode_discounted_loss -= self.episode_gamma * raw_rew
@@ -303,9 +282,9 @@ class SHAC:
 
         if self.ret_rms is not None:
             actor_loss = actor_loss * torch.sqrt(ret_var + 1e-6)
-
+            
         self.actor_loss = actor_loss.detach().cpu().item()
-
+            
         self.step_count += self.steps_num * self.num_envs
 
         return actor_loss
@@ -378,6 +357,7 @@ class SHAC:
         critic_loss = ((predicted_values - target_values) ** 2).mean()
 
         return critic_loss
+
 
     def initialize_env(self):
         self.env.clear_grad()
