@@ -46,6 +46,8 @@ class ActorDeterministicMLP(nn.Module):
         return self.actor(observations)
 
 
+from torch.utils.checkpoint import checkpoint
+
 class ActorStochasticMLP(nn.Module):
     def __init__(self, obs_dim, action_dim, cfg_network, device='cuda:0'):
         super(ActorStochasticMLP, self).__init__()
@@ -82,20 +84,24 @@ class ActorStochasticMLP(nn.Module):
         return self.logstd
 
     def forward(self, obs, deterministic = False):
-        mu = self.mu_net(obs)
+        def custom_forward(*inputs):
+            return self.mu_net(inputs[0])
+        
+        mu = checkpoint(custom_forward, obs)
 
         if deterministic:
             return mu
         else:
             std = self.logstd.exp() # (num_actions)
-            # eps = torch.randn((*obs.shape[:-1], std.shape[-1])).to(self.device)
-            # sample = mu + eps * std
             dist = Normal(mu, std)
             sample = dist.rsample()
             return sample
     
     def forward_with_dist(self, obs, deterministic = False):
-        mu = self.mu_net(obs)
+        def custom_forward(*inputs):
+            return self.mu_net(inputs[0])
+        
+        mu = checkpoint(custom_forward, obs)
         std = self.logstd.exp() # (num_actions)
 
         if deterministic:
@@ -106,7 +112,10 @@ class ActorStochasticMLP(nn.Module):
             return sample, mu, std
         
     def evaluate_actions_log_probs(self, obs, actions):
-        mu = self.mu_net(obs)
+        def custom_forward(*inputs):
+            return self.mu_net(inputs[0])
+        
+        mu = checkpoint(custom_forward, obs)
 
         std = self.logstd.exp()
         dist = Normal(mu, std)

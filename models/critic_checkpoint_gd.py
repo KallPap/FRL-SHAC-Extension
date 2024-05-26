@@ -11,6 +11,7 @@ import numpy as np
 
 from models import model_utils
 
+from torch.utils.checkpoint import checkpoint
 
 class CriticMLP(nn.Module):
     def __init__(self, obs_dim, cfg_network, device='cuda:0'):
@@ -37,4 +38,7 @@ class CriticMLP(nn.Module):
         print(self.critic)
 
     def forward(self, observations):
-        return self.critic(observations)
+        def custom_forward(*inputs):
+            return self.critic(inputs[0])
+        
+        return checkpoint(custom_forward, observations)
