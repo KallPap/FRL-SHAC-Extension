@@ -38,9 +38,9 @@ def create_dflex_env(**kwargs):
         no_grad=True, stochastic_init=cfg_train['params']['diff_env']['stochastic_env'], \
         MM_caching_frequency=cfg_train['params']['diff_env'].get('MM_caching_frequency', 1))
 
-    print('num_envs = ', env.num_envs)
-    print('num_actions = ', env.num_actions)
-    print('num_obs = ', env.num_obs)
+    # print('num_envs = ', env.num_envs)
+    # print('num_actions = ', env.num_actions)
+    # print('num_obs = ', env.num_obs)
 
     frames = kwargs.pop('frames', 1)
     if frames > 1:
@@ -58,7 +58,7 @@ class RLGPUEnv(vecenv.IVecEnv):
         self.rl_device = "cuda:0"
 
         self.full_state["obs"] = self.env.reset(force_reset=True).to(self.rl_device)
-        print(self.full_state["obs"].shape)
+        # print(self.full_state["obs"].shape)
 
     def step(self, actions):
         self.full_state["obs"], reward, is_done, info = self.env.step(actions.to(self.env.device))
@@ -78,7 +78,7 @@ class RLGPUEnv(vecenv.IVecEnv):
         info['action_space'] = self.env.action_space
         info['observation_space'] = self.env.observation_space
 
-        print(info['action_space'], info['observation_space'])
+        # print(info['action_space'], info['observation_space'])
 
         return info
 

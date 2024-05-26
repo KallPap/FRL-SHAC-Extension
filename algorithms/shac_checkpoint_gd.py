@@ -340,7 +340,7 @@ class SHAC:
             episode_gamma *= self.gamma
             if len(done_env_ids) > 0:
                 for done_env_id in done_env_ids:
-                    print('loss = {:.2f}, len = {}'.format(episode_loss[done_env_id].item(), episode_length[done_env_id]))
+                    # print('loss = {:.2f}, len = {}'.format(episode_loss[done_env_id].item(), episode_length[done_env_id]))
                     episode_loss_his.append(episode_loss[done_env_id].item())
                     episode_discounted_loss_his.append(episode_discounted_loss[done_env_id].item())
                     episode_length_his.append(episode_length[done_env_id].item())
@@ -386,7 +386,7 @@ class SHAC:
     @torch.no_grad()
     def run(self, num_games):
         mean_policy_loss, mean_policy_discounted_loss, mean_episode_length = self.evaluate_policy(num_games = num_games, deterministic = not self.stochastic_evaluation)
-        print_info('mean episode loss = {}, mean discounted loss = {}, mean episode length = {}'.format(mean_policy_loss, mean_policy_discounted_loss, mean_episode_length))
+        # print_info('mean episode loss = {}, mean discounted loss = {}, mean episode length = {}'.format(mean_policy_loss, mean_policy_discounted_loss, mean_episode_length))
 
     def train(self):
         self.start_time = time.time()
