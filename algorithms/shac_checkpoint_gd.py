@@ -7,6 +7,7 @@
 
 from multiprocessing.sharedctypes import Value
 import sys, os
+import torch.profiler
 
 from torch.nn.utils.clip_grad import clip_grad_norm_
 
@@ -336,10 +337,14 @@ class SHAC:
     def run(self, num_games):
         mean_policy_loss, mean_policy_discounted_loss, mean_episode_length = self.evaluate_policy(num_games=num_games, deterministic=not self.stochastic_evaluation)
 
+    
+
     def train(self):
         self.start_time = time.time()
+
         rews = []
         steps = []
+
         self.time_report.add_timer("algorithm")
         self.time_report.add_timer("compute actor loss")
         self.time_report.add_timer("forward simulation")
@@ -349,119 +354,127 @@ class SHAC:
         self.time_report.add_timer("critic training")
 
         self.time_report.start_timer("algorithm")
+
         self.initialize_env()
         self.episode_loss = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.episode_discounted_loss = torch.zeros(self.num_envs, dtype=torch.float32, device=self.device)
         self.episode_length = torch.zeros(self.num_envs, dtype=int, device=self.device)
         self.episode_gamma = torch.ones(self.num_envs, dtype=torch.float32, device=self.device)
 
-        def actor_closure():
-            self.actor_optimizer.zero_grad()
-            self.time_report.start_timer("compute actor loss")
-            self.time_report.start_timer("forward simulation")
-            actor_loss = self.compute_actor_loss()
-            self.time_report.end_timer("forward simulation")
-            self.time_report.start_timer("backward simulation")
-            actor_loss.backward()
-            self.time_report.end_timer("backward simulation")
-            with torch.no_grad():
-                self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
-                if self.truncate_grad:
-                    clip_grad_norm_(self.actor.parameters(), self.grad_norm)
-                self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters())
-                if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
-                    print('NaN gradient')
-                    raise ValueError
-            self.time_report.end_timer("compute actor loss")
-            return actor_loss
-
-        for epoch in range(self.max_epochs):
-            time_start_epoch = time.time()
-            if self.lr_schedule == 'linear':
-                actor_lr = (1e-5 - self.actor_lr) * float(epoch / self.max_epochs) + self.actor_lr
-                for param_group in self.actor_optimizer.param_groups:
-                    param_group['lr'] = actor_lr
-                lr = actor_lr
-                critic_lr = (1e-5 - self.critic_lr) * float(epoch / self.max_epochs) + self.critic_lr
-                for param_group in self.critic_optimizer.param_groups:
-                    param_group['lr'] = critic_lr
-            else:
-                lr = self.actor_lr
-
-            self.time_report.start_timer("actor training")
-            self.actor_optimizer.step(actor_closure).detach().item()
-            self.time_report.end_timer("actor training")
-
-            self.time_report.start_timer("prepare critic dataset")
-            with torch.no_grad():
-                self.compute_target_values()
-                dataset = CriticDataset(self.batch_size, self.obs_buf, self.target_values, drop_last=False)
-            self.time_report.end_timer("prepare critic dataset")
-
-            self.time_report.start_timer("critic training")
-            self.value_loss = 0.
-            for j in range(self.critic_iterations):
-                total_critic_loss = 0.
-                batch_cnt = 0
-                for i in range(len(dataset)):
-                    batch_sample = dataset[i]
-                    self.critic_optimizer.zero_grad()
-                    training_critic_loss = self.compute_critic_loss(batch_sample)
-                    training_critic_loss.backward()
-                    for params in self.critic.parameters():
-                        params.grad.nan_to_num_(0.0, 0.0, 0.0)
+        with torch.profiler.profile(
+            schedule=torch.profiler.schedule(wait=1, warmup=1, active=3),
+            on_trace_ready=torch.profiler.tensorboard_trace_handler(self.log_dir),
+            record_shapes=True,
+            profile_memory=True,
+            with_stack=True
+        ) as prof:
+            def actor_closure():
+                self.actor_optimizer.zero_grad()
+                self.time_report.start_timer("compute actor loss")
+                self.time_report.start_timer("forward simulation")
+                actor_loss = self.compute_actor_loss()
+                self.time_report.end_timer("forward simulation")
+                self.time_report.start_timer("backward simulation")
+                actor_loss.backward()
+                self.time_report.end_timer("backward simulation")
+                with torch.no_grad():
+                    self.grad_norm_before_clip = tu.grad_norm(self.actor.parameters())
                     if self.truncate_grad:
-                        clip_grad_norm_(self.critic.parameters(), self.grad_norm)
-                    self.critic_optimizer.step()
-                    total_critic_loss += training_critic_loss
-                    batch_cnt += 1
-                self.value_loss = (total_critic_loss / batch_cnt).detach().cpu().item()
-            self.time_report.end_timer("critic training")
-            self.iter_count += 1
-            time_end_epoch = time.time()
-            time_elapse = time.time() - self.start_time
-            self.writer.add_scalar('lr/iter', lr, self.iter_count)
-            self.writer.add_scalar('actor_loss/step', self.actor_loss, self.step_count)
-            self.writer.add_scalar('actor_loss/iter', self.actor_loss, self.iter_count)
-            self.writer.add_scalar('value_loss/step', self.value_loss, self.step_count)
-            self.writer.add_scalar('value_loss/iter', self.value_loss, self.iter_count)
-            if len(self.episode_loss_his) > 0:
-                mean_episode_length = self.episode_length_meter.get_mean()
-                mean_policy_loss = self.episode_loss_meter.get_mean()
-                mean_policy_discounted_loss = self.episode_discounted_loss_meter.get_mean()
-                if mean_policy_loss < self.best_policy_loss:
-                    self.save()
-                    self.best_policy_loss = mean_policy_loss
-                self.writer.add_scalar('policy_loss/step', mean_policy_loss, self.step_count)
-                self.writer.add_scalar('policy_loss/time', mean_policy_loss, time_elapse)
-                self.writer.add_scalar('policy_loss/iter', mean_policy_loss, self.iter_count)
-                self.writer.add_scalar('rewards/step', -mean_policy_loss, self.step_count)
-                self.writer.add_scalar('rewards/time', -mean_policy_loss, time_elapse)
-                self.writer.add_scalar('rewards/iter', -mean_policy_loss, self.iter_count)
-                rews.append(-mean_policy_loss)
-                steps.append(self.step_count)
-                self.writer.add_scalar('policy_discounted_loss/step', mean_policy_discounted_loss, self.step_count)
-                self.writer.add_scalar('policy_discounted_loss/iter', mean_policy_discounted_loss, self.iter_count)
-                self.writer.add_scalar('best_policy_loss/step', self.best_policy_loss, self.step_count)
-                self.writer.add_scalar('best_policy_loss/iter', self.best_policy_loss, self.iter_count)
-                self.writer.add_scalar('episode_lengths/iter', mean_episode_length, self.iter_count)
-                self.writer.add_scalar('episode_lengths/step', mean_episode_length, self.step_count)
-                self.writer.add_scalar('episode_lengths/time', mean_episode_length, time_elapse)
-            else:
-                mean_policy_loss = np.inf
-                mean_policy_discounted_loss = np.inf
-                mean_episode_length = 0
+                        clip_grad_norm_(self.actor.parameters(), self.grad_norm)
+                    self.grad_norm_after_clip = tu.grad_norm(self.actor.parameters())
+                    if torch.isnan(self.grad_norm_before_clip) or self.grad_norm_before_clip > 1000000.:
+                        print('NaN gradient')
+                        raise ValueError
+                self.time_report.end_timer("compute actor loss")
+                return actor_loss
 
-            self.writer.flush()
+            for epoch in range(self.max_epochs):
+                time_start_epoch = time.time()
+                if self.lr_schedule == 'linear':
+                    actor_lr = (1e-5 - self.actor_lr) * float(epoch / self.max_epochs) + self.actor_lr
+                    for param_group in self.actor_optimizer.param_groups:
+                        param_group['lr'] = actor_lr
+                    lr = actor_lr
+                    critic_lr = (1e-5 - self.critic_lr) * float(epoch / self.max_epochs) + self.critic_lr
+                    for param_group in self.critic_optimizer.param_groups:
+                        param_group['lr'] = critic_lr
+                else:
+                    lr = self.actor_lr
 
-            if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
-                self.save(self.name + "policy_iter{}_reward{:.3f}".format(self.iter_count, -mean_policy_loss))
+                self.time_report.start_timer("actor training")
+                self.actor_optimizer.step(actor_closure).detach().item()
+                self.time_report.end_timer("actor training")
 
-            with torch.no_grad():
-                alpha = self.target_critic_alpha
-                for param, param_targ in zip(self.critic.parameters(), self.target_critic.parameters()):
-                    param_targ.data.mul_(alpha)
-                    param_targ.data.add_((1. - alpha) * param.data)
+                self.time_report.start_timer("prepare critic dataset")
+                with torch.no_grad():
+                    self.compute_target_values()
+                    dataset = CriticDataset(self.batch_size, self.obs_buf, self.target_values, drop_last=False)
+                self.time_report.end_timer("prepare critic dataset")
+
+                self.time_report.start_timer("critic training")
+                self.value_loss = 0.
+                for j in range(self.critic_iterations):
+                    total_critic_loss = 0.
+                    batch_cnt = 0
+                    for i in range(len(dataset)):
+                        batch_sample = dataset[i]
+                        self.critic_optimizer.zero_grad()
+                        training_critic_loss = self.compute_critic_loss(batch_sample)
+                        training_critic_loss.backward()
+                        for params in self.critic.parameters():
+                            params.grad.nan_to_num_(0.0, 0.0, 0.0)
+                        if self.truncate_grad:
+                            clip_grad_norm_(self.critic.parameters(), self.grad_norm)
+                        self.critic_optimizer.step()
+                        total_critic_loss += training_critic_loss
+                        batch_cnt += 1
+                    self.value_loss = (total_critic_loss / batch_cnt).detach().cpu().item()
+                self.time_report.end_timer("critic training")
+                self.iter_count += 1
+                time_end_epoch = time.time()
+                time_elapse = time.time() - self.start_time
+                self.writer.add_scalar('lr/iter', lr, self.iter_count)
+                self.writer.add_scalar('actor_loss/step', self.actor_loss, self.step_count)
+                self.writer.add_scalar('actor_loss/iter', self.actor_loss, self.iter_count)
+                self.writer.add_scalar('value_loss/step', self.value_loss, self.step_count)
+                self.writer.add_scalar('value_loss/iter', self.value_loss, self.iter_count)
+                if len(self.episode_loss_his) > 0:
+                    mean_episode_length = self.episode_length_meter.get_mean()
+                    mean_policy_loss = self.episode_loss_meter.get_mean()
+                    mean_policy_discounted_loss = self.episode_discounted_loss_meter.get_mean()
+                    if mean_policy_loss < self.best_policy_loss:
+                        self.save()
+                        self.best_policy_loss = mean_policy_loss
+                    self.writer.add_scalar('policy_loss/step', mean_policy_loss, self.step_count)
+                    self.writer.add_scalar('policy_loss/time', mean_policy_loss, time_elapse)
+                    self.writer.add_scalar('policy_loss/iter', mean_policy_loss, self.iter_count)
+                    self.writer.add_scalar('rewards/step', -mean_policy_loss, self.step_count)
+                    self.writer.add_scalar('rewards/time', -mean_policy_loss, time_elapse)
+                    self.writer.add_scalar('rewards/iter', -mean_policy_loss, self.iter_count)
+                    rews.append(-mean_policy_loss)
+                    steps.append(self.step_count)
+                    self.writer.add_scalar('policy_discounted_loss/step', mean_policy_discounted_loss, self.step_count)
+                    self.writer.add_scalar('policy_discounted_loss/iter', mean_policy_discounted_loss, self.iter_count)
+                    self.writer.add_scalar('best_policy_loss/step', self.best_policy_loss, self.step_count)
+                    self.writer.add_scalar('best_policy_loss/iter', self.best_policy_loss, self.iter_count)
+                    self.writer.add_scalar('episode_lengths/iter', mean_episode_length, self.iter_count)
+                    self.writer.add_scalar('episode_lengths/step', mean_episode_length, self.step_count)
+                    self.writer.add_scalar('episode_lengths/time', mean_episode_length, time_elapse)
+                else:
+                    mean_policy_loss = np.inf
+                    mean_policy_discounted_loss = np.inf
+                    mean_episode_length = 0
+
+                self.writer.flush()
+
+                if self.save_interval > 0 and (self.iter_count % self.save_interval == 0):
+                    self.save(self.name + "policy_iter{}_reward{:.3f}".format(self.iter_count, -mean_policy_loss))
+
+                with torch.no_grad():
+                    alpha = self.target_critic_alpha
+                    for param, param_targ in zip(self.critic.parameters(), self.target_critic.parameters()):
+                        param_targ.data.mul_(alpha)
+                        param_targ.data.add_((1. - alpha) * param.data)
 
         self.time_report.end_timer("algorithm")
         self.time_report.report()
